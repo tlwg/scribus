@@ -1,6 +1,6 @@
 diff -uNr scribus-1.3.8.orig/scribus/pageitem.cpp scribus-1.3.8/scribus/pageitem.cpp
 --- scribus-1.3.8.orig/scribus/pageitem.cpp	2010-07-20 02:00:22.000000000 +0700
-+++ scribus-1.3.8/scribus/pageitem.cpp	2010-08-29 15:35:53.607019628 +0700
++++ scribus-1.3.8/scribus/pageitem.cpp	2010-08-29 15:35:53.000000000 +0700
 @@ -1692,6 +1692,8 @@
  	uint zae = 0;
  	QChar ch = itemText.text(base);
@@ -12,7 +12,7 @@ diff -uNr scribus-1.3.8.orig/scribus/pageitem.cpp scribus-1.3.8/scribus/pageitem
  		// compatibility mode: ignore subsequent pagenumber chars
 diff -uNr scribus-1.3.8.orig/scribus/pageitem_textframe.cpp scribus-1.3.8/scribus/pageitem_textframe.cpp
 --- scribus-1.3.8.orig/scribus/pageitem_textframe.cpp	2010-06-19 06:04:10.000000000 +0700
-+++ scribus-1.3.8/scribus/pageitem_textframe.cpp	2010-08-29 19:08:23.087019634 +0700
++++ scribus-1.3.8/scribus/pageitem_textframe.cpp	2010-09-25 23:52:40.000000000 +0700
 @@ -1062,6 +1062,7 @@
  		outs = false;
  		OFs = 0;
@@ -113,9 +113,168 @@ diff -uNr scribus-1.3.8.orig/scribus/pageitem_textframe.cpp scribus-1.3.8/scribu
  //						qDebug() << QString("no break pos: %1-%2 @ %3 wid %4 nat %5 endX %6")
  //							   .arg(current.line.firstItem).arg(current.line.firstItem)
  //							   .arg(current.line.x).arg(current.line.width).arg(current.line.naturalWidth).arg(EndX);
+@@ -2673,7 +2732,7 @@
+ 	QString uc = k->text();
+ 	QString cr, Tcha, Twort;
+ 	uint Tcoun;
+-	int len, pos;
++	int len, pos, numcell, nextPos, prevPos;
+ 	int keyModifiers=0;
+ 	Qt::KeyboardModifiers buttonModifiers = k->modifiers();
+ 	if (k->modifiers() & Qt::ShiftModifier)
+@@ -2924,15 +2983,18 @@
+ 		}
+ 		else if ( buttonModifiers & Qt::ShiftModifier )
+ 		{
+-			--CPos;
++			int newPos = itemText.textAttributes()->previousCellPosition(CPos);
++			int delta = newPos - CPos;
++			CPos = newPos;
+ 			if ( CPos < 0 )
+ 				CPos = 0;
+ 			else
+-				ExpandSel(-1, oldPos);
++				ExpandSel(delta, oldPos);
+ 		}
+ 		else
+ 		{
+-			--CPos;
++			int newPos = itemText.textAttributes()->previousCellPosition(CPos);
++			CPos = (newPos==CPos) ? --CPos : newPos;
+ 			if (CPos < firstInFrame())
+ 			{
+ 				CPos = firstInFrame();
+@@ -2981,16 +3043,17 @@
+ 		}
+ 		else if ( buttonModifiers & Qt::ShiftModifier )
+ 		{
+-			++CPos;
+-			if ( CPos > itemText.length() )
+-				--CPos;
+-			else
+-				ExpandSel(1, oldPos);
++			int newPos = itemText.textAttributes()->nextCellPosition(CPos);
++			int delta = newPos - CPos;
++			CPos = newPos;
++			if ( CPos <= itemText.length() )
++				ExpandSel(delta, oldPos);
+ 		}
+ 		else
+ 		{
+-			++CPos; // new position within text ?
+-			if (CPos > lastInFrame())
++			int newPos = itemText.textAttributes()->nextCellPosition(CPos);
++			CPos = (newPos==CPos) ? ++CPos : newPos;
++			if (CPos > lastInFrame()) // new position within text ?
+ 			{
+ //				--CPos;
+ 				CPos = lastInFrame() + 1;
+@@ -3028,9 +3091,18 @@
+ 			keyRepeat = false;
+ 			return;
+ 		}
++		numcell = 1;
++#if defined (Q_WS_X11)
++		if ( buttonModifiers & Qt::ControlModifier )
++			nextPos = itemText.textAttributes()->nextWordPosition(CPos);
++		else
++			nextPos = itemText.textAttributes()->nextCellPosition(CPos);
++			
++		numcell = nextPos - CPos;
++#endif
+ 		cr = itemText.text(CPos,1);
+ 		if (itemText.lengthOfSelection() == 0)
+-			itemText.select(CPos, 1, true);
++			itemText.select(CPos, numcell, true);
+ 		deleteSelectedTextFromFrame();
+ 		update();
+ //		Tinput = false;
+@@ -3058,8 +3130,18 @@
+ 		cr = itemText.text(qMax(CPos-1,0),1);
+ 		if (itemText.lengthOfSelection() == 0)
+ 		{
+-			--CPos;
+-			itemText.select(CPos, 1, true);
++			//--CPos;
++			//itemText.select(CPos, 1, true);
++			numcell = 1;
++			prevPos = CPos - 1;
++#if defined (Q_WS_X11)
++			if ( buttonModifiers & Qt::ControlModifier ) {
++				prevPos = itemText.textAttributes()->previousWordPosition(CPos);
++				numcell = CPos - prevPos;
++				CPos = prevPos;
++			}
++#endif
++			itemText.select(CPos, numcell, true);
+ 		}
+ 		deleteSelectedTextFromFrame();
+ //		Tinput = false;
+@@ -3169,58 +3251,9 @@
+ 
+ void PageItem_TextFrame::setNewPos(int oldPos, int len, int dir)
+ {
+-	
+-	bool isSpace, wasSpace;
+-	if ( dir > 0 && oldPos < len )
+-	{
+-		wasSpace = itemText.text(oldPos).isSpace();
+-		CPos=oldPos+1;
+-		while (CPos<len)
+-		{
+-			isSpace = itemText.text(CPos).isSpace();
+-			if (wasSpace && !isSpace)
+-				break;
+-			++CPos;
+-			wasSpace=isSpace;
+-			
+-		}
+-		/*
+-		isSpace = itemText.at(oldPos)->ch.at(0).isSpace();
+-		CPos = oldPos +1;
+-		for (int i=oldPos+1; i < len; i++)
+-		{
+-			if ( itemText.at(i)->ch.at(0).isSpace() != isSpace )
+-				break;
+-			CPos++;
+-		}
+-		*/
+-	}
+-	else if ( dir < 0 && oldPos > 0 )
+-	{
+-		CPos=oldPos-1;
+-		wasSpace = itemText.text(CPos).isSpace();
+-		while (CPos>0)
+-		{
+-			isSpace = itemText.text(CPos).isSpace();
+-			if (!wasSpace && isSpace)
+-			{
+-				++CPos;
+-				break;
+-			}
+-			--CPos;
+-			wasSpace=isSpace;
+-			
+-		}
+-		/*
+-		oldPos--;
+-		isSpace = itemText.at(oldPos)->ch.at(0).isSpace();
+-		for (int i=oldPos; i >= 0; i--)
+-		{
+-			if (  itemText.at(i)->ch.at(0).isSpace() != isSpace )
+-				break;
+-			CPos--;
+-		}
+-		*/
++	if (( dir > 0 && oldPos < len ) || ( dir < 0 && oldPos > 0 )) {
++		CPos = dir < 0 ? itemText.textAttributes()->previousWordPosition(oldPos) :
++							 itemText.textAttributes()->nextWordPosition(oldPos);
+ 	}
+ 	cursorBiasBackward = (dir < 0);
+ }
 diff -uNr scribus-1.3.8.orig/scribus/text/CMakeLists.txt scribus-1.3.8/scribus/text/CMakeLists.txt
 --- scribus-1.3.8.orig/scribus/text/CMakeLists.txt	2008-06-10 03:48:57.000000000 +0700
-+++ scribus-1.3.8/scribus/text/CMakeLists.txt	2010-08-29 08:09:33.384019629 +0700
++++ scribus-1.3.8/scribus/text/CMakeLists.txt	2010-08-29 08:09:33.000000000 +0700
 @@ -13,8 +13,11 @@
  specialchars.cpp
  storytext.cpp
@@ -130,8 +289,8 @@ diff -uNr scribus-1.3.8.orig/scribus/text/CMakeLists.txt scribus-1.3.8/scribus/t
  
 diff -uNr scribus-1.3.8.orig/scribus/text/scattributes_thai.cpp scribus-1.3.8/scribus/text/scattributes_thai.cpp
 --- scribus-1.3.8.orig/scribus/text/scattributes_thai.cpp	1970-01-01 07:00:00.000000000 +0700
-+++ scribus-1.3.8/scribus/text/scattributes_thai.cpp	2010-08-30 13:51:09.881179998 +0700
-@@ -0,0 +1,234 @@
++++ scribus-1.3.8/scribus/text/scattributes_thai.cpp	2010-09-25 22:03:49.000000000 +0700
+@@ -0,0 +1,250 @@
 +/*
 + For general Scribus (>=1.3.2) copyright and licensing information please refer
 + to the COPYING file provided with the program. Following this notice may exist
@@ -144,7 +303,17 @@ diff -uNr scribus-1.3.8.orig/scribus/text/scattributes_thai.cpp scribus-1.3.8/sc
 +    begin                : Sat Aug 28 2010
 +    copyright            : (C) 2010 by Thanomsub Noppaburana
 +    email                : donga.nb@gmail.com
-+	***************************************************************************/
++
++    -------------------
++
++    This is based on HarfBuzz Thai, an OpenType Layout engine library.
++
++    Copyright (C) 2008-2010 Thanomsub Noppaburana <donga.nb@gmail.com>
++    Copyright (C) 2007 Jakkapun Kwanroengjai <jakkapun@mm.co.th>
++    Copyright (C) 2003 Pattara Kiatisevi <pattara-list@mm.co.th>
++    Copyright (C) 2003 Theppitak Karoonboonyanan <thep@linux.thai.net>
++
++    ***************************************************************************/
 +
 +/***************************************************************************
 +*                                                                         *
@@ -280,9 +449,15 @@ diff -uNr scribus-1.3.8.orig/scribus/text/scattributes_thai.cpp scribus-1.3.8/sc
 +static int thai_contain_glyphs (ScFace* font, const int glyph_map[128])
 +{
 +    unsigned char c;
++    static QTextCodec *codec = 0;
++    if (!codec) codec = QTextCodec::codecForName("UTF-8");
++
 +    for (c = 0; c < 0x80; c++) {
 +        if ( glyph_map[c] ) {
-+            if ( !font->canRender ( QChar(glyph_map[c]) )  )
++			QChar chars(glyph_map[c]);
++			//QByteArray ba = codec->fromUnicode(&chars, 1);
++			//const uchar *data = (const uchar *)ba.constData();
++            if ( !font->canRender ( QChar((ushort) chars.unicode()) )  )
 +                return 0;
 +        }
 +    }
@@ -368,8 +543,8 @@ diff -uNr scribus-1.3.8.orig/scribus/text/scattributes_thai.cpp scribus-1.3.8/sc
 +}
 diff -uNr scribus-1.3.8.orig/scribus/text/sctextattributes.cpp scribus-1.3.8/scribus/text/sctextattributes.cpp
 --- scribus-1.3.8.orig/scribus/text/sctextattributes.cpp	1970-01-01 07:00:00.000000000 +0700
-+++ scribus-1.3.8/scribus/text/sctextattributes.cpp	2010-08-30 15:49:44.886179997 +0700
-@@ -0,0 +1,152 @@
++++ scribus-1.3.8/scribus/text/sctextattributes.cpp	2010-09-26 00:03:04.000000000 +0700
+@@ -0,0 +1,170 @@
 +/*
 + For general Scribus (>=1.3.2) copyright and licensing information please refer
 + to the COPYING file provided with the program. Following this notice may exist
@@ -399,7 +574,10 @@ diff -uNr scribus-1.3.8.orig/scribus/text/sctextattributes.cpp scribus-1.3.8/scr
 +#include "storytext.h"
 +#include "sctextattributes.h"
 +
++/* include scripts */
 +#include "scattributes_thai.cpp"
++
++_ConvertStringToGlyphIndices ScTextAttributes::convertStringToGlyphIndices = 0;
 +
 +ScTextAttributes::ScTextAttributes(StoryText* itemText)
 +	: QObject(), 
@@ -411,6 +589,7 @@ diff -uNr scribus-1.3.8.orig/scribus/text/sctextattributes.cpp scribus-1.3.8/scr
 +ScTextAttributes::~ScTextAttributes()
 +{
 +	delete m_textLayout;
++	convertStringToGlyphIndices = 0;
 +}
 +void ScTextAttributes::setText(const QString& text)
 +{
@@ -472,6 +651,18 @@ diff -uNr scribus-1.3.8.orig/scribus/text/sctextattributes.cpp scribus-1.3.8/scr
 +{
 +	return textLayout()->text();
 +}
++
++_ConvertStringToGlyphIndices ScTextAttributes::script(const QString& text)
++{
++	if (!text.isEmpty()) {
++		if (text[0] >= 0x0e01 && text[0] <= 0x0e66)
++			convertStringToGlyphIndices = ThaiConvertStringToGlyphIndices;
++		else
++			convertStringToGlyphIndices = 0;
++	}
++	return convertStringToGlyphIndices;
++}
++
 +TextCell ScTextAttributes::getTextCell(int pos)
 +{
 +	static TextCell result;
@@ -516,16 +707,18 @@ diff -uNr scribus-1.3.8.orig/scribus/text/sctextattributes.cpp scribus-1.3.8/scr
 +				textToRender += text()[textCell.endPos+1];
 +			}
 +		}
-+		glyphs = ThaiConvertStringToGlyphIndices(&itemFont, textToRender);
++		
++		if (script(textToRender))
++			glyphs = convertStringToGlyphIndices(&itemFont, textToRender);
 +	}
-+	return glyphs[pos - textCell.beginPos];
++	return (glyphs.count() > 0) ? glyphs[pos - textCell.beginPos] : text()[pos].unicode();
 +#endif
 +	//return m_glyphsForRender[pos];
 +}
 diff -uNr scribus-1.3.8.orig/scribus/text/sctextattributes.h scribus-1.3.8/scribus/text/sctextattributes.h
 --- scribus-1.3.8.orig/scribus/text/sctextattributes.h	1970-01-01 07:00:00.000000000 +0700
-+++ scribus-1.3.8/scribus/text/sctextattributes.h	2010-08-29 19:11:43.366019633 +0700
-@@ -0,0 +1,90 @@
++++ scribus-1.3.8/scribus/text/sctextattributes.h	2010-09-25 21:49:18.000000000 +0700
+@@ -0,0 +1,95 @@
 +/*
 + For general Scribus (>=1.3.2) copyright and licensing information please refer
 + to the COPYING file provided with the program. Following this notice may exist
@@ -570,6 +763,8 @@ diff -uNr scribus-1.3.8.orig/scribus/text/sctextattributes.h scribus-1.3.8/scrib
 +
 +class StoryText;
 +
++typedef QList<uint> (*_ConvertStringToGlyphIndices) (ScFace* font, const QString& text);
++
 +/**
 + * This class used to manage the attributes and each character's glyph
 + * in text string of Scribus textframe
@@ -607,8 +802,11 @@ diff -uNr scribus-1.3.8.orig/scribus/text/sctextattributes.h scribus-1.3.8/scrib
 +	
 +	QTextLayout* textLayout();
 +	
++	_ConvertStringToGlyphIndices script(const QString& text);
++	
 +private:
 +	bool updateTextCache();
++	static _ConvertStringToGlyphIndices convertStringToGlyphIndices;
 +	
 +	StoryText* m_itemText;
 +	QTextLayout* m_textLayout;
@@ -618,7 +816,7 @@ diff -uNr scribus-1.3.8.orig/scribus/text/sctextattributes.h scribus-1.3.8/scrib
 +#endif // SCTEXTATTRIBUTES_H
 diff -uNr scribus-1.3.8.orig/scribus/text/storytext.cpp scribus-1.3.8/scribus/text/storytext.cpp
 --- scribus-1.3.8.orig/scribus/text/storytext.cpp	2010-07-20 04:57:05.000000000 +0700
-+++ scribus-1.3.8/scribus/text/storytext.cpp	2010-08-30 16:03:39.695179998 +0700
++++ scribus-1.3.8/scribus/text/storytext.cpp	2010-08-30 16:03:39.000000000 +0700
 @@ -49,6 +49,9 @@
  	else {
  		d = new ScText_Shared(NULL);
@@ -703,7 +901,7 @@ diff -uNr scribus-1.3.8.orig/scribus/text/storytext.cpp scribus-1.3.8/scribus/te
  {
 diff -uNr scribus-1.3.8.orig/scribus/text/storytext.h scribus-1.3.8/scribus/text/storytext.h
 --- scribus-1.3.8.orig/scribus/text/storytext.h	2009-03-14 23:13:41.000000000 +0700
-+++ scribus-1.3.8/scribus/text/storytext.h	2010-08-29 01:20:04.186097159 +0700
++++ scribus-1.3.8/scribus/text/storytext.h	2010-08-29 01:20:04.000000000 +0700
 @@ -28,11 +28,13 @@
  #include <QObject>
  #include <QString>
