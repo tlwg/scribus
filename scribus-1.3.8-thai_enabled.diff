@@ -12,7 +12,7 @@ diff -uNr scribus-1.3.8.orig/scribus/pageitem.cpp scribus-1.3.8/scribus/pageitem
  		// compatibility mode: ignore subsequent pagenumber chars
 diff -uNr scribus-1.3.8.orig/scribus/pageitem_textframe.cpp scribus-1.3.8/scribus/pageitem_textframe.cpp
 --- scribus-1.3.8.orig/scribus/pageitem_textframe.cpp	2010-06-19 06:04:10.000000000 +0700
-+++ scribus-1.3.8/scribus/pageitem_textframe.cpp	2010-09-25 23:52:40.000000000 +0700
++++ scribus-1.3.8/scribus/pageitem_textframe.cpp	2010-09-26 09:35:07.000000000 +0700
 @@ -1062,6 +1062,7 @@
  		outs = false;
  		OFs = 0;
@@ -203,9 +203,9 @@ diff -uNr scribus-1.3.8.orig/scribus/pageitem_textframe.cpp scribus-1.3.8/scribu
 +			if ( buttonModifiers & Qt::ControlModifier ) {
 +				prevPos = itemText.textAttributes()->previousWordPosition(CPos);
 +				numcell = CPos - prevPos;
-+				CPos = prevPos;
 +			}
 +#endif
++			CPos = prevPos;
 +			itemText.select(CPos, numcell, true);
  		}
  		deleteSelectedTextFromFrame();
