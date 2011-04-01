@@ -1,0 +1,961 @@
+Description: Enable Thai support
+Origin: http://linux.thai.net/svn/software/scribus/
+Author: Thanomsub Noppaburana <donga.nb@gmail.com>
+Last-Update: 2011-04-01
+
+Added feature: 
+    - Script checking for choose the correct language of text attributes.
+    - Logcluster management in TextFrame's edit mode.
+
+Bug fixed:
+    - Return the original char when the list of render glyphs empty.
+    - Fixed incorrect delete previous character with Backspace key which
+      found in Revision 3.
+
+Known Bugs:
+    - Mouse click/double click in edit mode may be move  edit cursor position
+      within text cell.
+
+2011-04-01  Theppitak Karoonboonyanan  <thep@linux.thai.net>:
+	Refresh patch to scribus 1.3.9.dfsg+svn20110210-2 in Debian sid.
+
+Index: scribus-1.3.9.dfsg+svn20110210/scribus/pageitem.cpp
+===================================================================
+--- scribus-1.3.9.dfsg+svn20110210.orig/scribus/pageitem.cpp	2011-02-09 22:22:24.000000000 +0700
++++ scribus-1.3.9.dfsg+svn20110210/scribus/pageitem.cpp	2011-04-01 12:10:46.000000000 +0700
+@@ -1698,6 +1698,8 @@
+ 	uint zae = 0;
+ 	QChar ch = itemText.text(base);
+ 	QString chstr = ch;
++	if (!chstr.isEmpty())
++		chstr[0] = itemText.textAttributes()->getRenderChar(base);
+ 	if (ch == SpecialChars::PAGENUMBER)
+ 	{
+ 		// compatibility mode: ignore subsequent pagenumber chars
+Index: scribus-1.3.9.dfsg+svn20110210/scribus/pageitem_textframe.cpp
+===================================================================
+--- scribus-1.3.9.dfsg+svn20110210.orig/scribus/pageitem_textframe.cpp	2011-02-09 22:22:24.000000000 +0700
++++ scribus-1.3.9.dfsg+svn20110210/scribus/pageitem_textframe.cpp	2011-04-01 12:22:19.000000000 +0700
+@@ -1069,6 +1069,7 @@
+ 		outs = false;
+ 		OFs = 0;
+ 		MaxChars = 0;
++		itemText.textAttributes()->update(); // update text cache and render glyph before laying-out.
+ 		for (int a = firstInFrame(); a < itemText.length(); ++a)
+ 		{
+ 			hl = itemText.item(a);
+@@ -1812,7 +1813,7 @@
+ 				}
+ 				else // outs -- last char went outside the columns (or into flow-around shape)
+ 				{
+-					if (current.breakIndex >= 0)            // Hier koenen auch andere Trennungen eingebaut werden
++					if (false && current.breakIndex >= 0)            // Hier koenen auch andere Trennungen eingebaut werden
+ 					{
+ 						// go back to last break position
+ //						qDebug() << QString("new break pos a=%1 BuPos=%2 current.breakIndex=%3").arg(a).arg(BuPos).arg(current.breakIndex);
+@@ -1903,8 +1904,11 @@
+ 							}
+ 							else
+ 							{
+-								--a;
+-								--current.itemsInLine;
++								//--a;
++								//--current.itemsInLine;
++								int delta = a - itemText.prevWord(a) + 1;
++								a -= delta;
++								current.itemsInLine -= delta;
+ 							}
+ 						}
+ 						if (a >= 0)
+@@ -1919,6 +1923,14 @@
+ 							else if (style.lineSpacingMode() == ParagraphStyle::BaselineGridLineSpacing)
+ 								style.setLineSpacing(m_Doc->typographicSettings.valueBaseGrid);
+ 						}
++
++						// == Begin donga insert ==========================================
++						if (hl->ch == ' ') {
++							hl->setEffects(hl->effects() | ScStyle_SuppressSpace);
++							hl->glyph.xadvance = 0;
++						}
++						// == End donga insert ============================================
++
+ 						current.breakLine(itemText, style, firstLineOffset(), a);
+ //						qDebug() << QString("style no break pos %1: %2 (%3)").arg(a).arg(style.alignment()).arg(style.parent());
+ //						qDebug() << QString("style nb @%6: %1 -- %2, %4/%5 char: %3").arg(style.leftMargin()).arg(style.rightMargin())
+@@ -1926,6 +1938,53 @@
+ //							   .arg(a);
+ 						EndX = current.endOfLine(cl, pf2, style.rightMargin());
+ 						current.finishLine(EndX);
++
++						// == Begin donga insert ==========================================
++						if ((hl->effects() & ScStyle_HyphenationPossible) || hl->ch == SpecialChars::SHYPHEN)
++						{
++							// insert hyphen
++							current.hyphenCount++;
++							hl->setEffects(hl->effects() | ScStyle_SmartHyphenVisible);
++							hl->glyph.grow();
++							hl->glyph.more->glyph = charStyle.font().char2CMap(QChar('-'));
++							hl->glyph.more->xadvance = charStyle.font().charWidth('-', itemText.charStyle(a).fontSize() / 10.0) * (itemText.charStyle(a).scaleH() / 1000.0);
++						}
++						else
++						{
++							if (hl->ch != '-')
++								current.hyphenCount = 0;
++							hl->setEffects(hl->effects() & ~ScStyle_SmartHyphenVisible);
++							hl->glyph.shrink();
++						}
++
++						// Justification
++//						if (style.alignment() != 0)
++						{
++							if (opticalMargins & ParagraphStyle::OM_RightHangingPunct)
++								current.line.width += opticalRightMargin(itemText, current.line);
++
++							OFs = 0;
++							if (style.alignment() == ParagraphStyle::Rightaligned)
++								OFs = current.line.width - current.line.naturalWidth;
++							if (style.alignment() == ParagraphStyle::Centered)
++								OFs = (current.line.width - current.line.naturalWidth) / 2;
++
++							if ((style.alignment() == ParagraphStyle::Justified)
++								|| (style.alignment() == ParagraphStyle::Extended))
++							{
++								justifyLine(itemText, current.line);
++							}
++							else
++							{
++								if (opticalMargins & ParagraphStyle::OM_RightHangingPunct)
++									current.line.naturalWidth += opticalRightMargin(itemText, current.line);
++								indentLine(itemText, current.line, OFs);
++							}
++//							qDebug() << QString("line: endx=%1 next pos=(%2,%3").arg(EndX).arg(current.line.x + current.line.width).arg(current.yPos);
++							current.xPos = current.line.x + current.line.width;
++						}
++						// == End donga insert ============================================
++
+ //						qDebug() << QString("no break pos: %1-%2 @ %3 wid %4 nat %5 endX %6")
+ //							   .arg(current.line.firstItem).arg(current.line.firstItem)
+ //							   .arg(current.line.x).arg(current.line.width).arg(current.line.naturalWidth).arg(EndX);
+@@ -2680,7 +2739,7 @@
+ 	QString uc = k->text();
+ 	QString cr, Tcha, Twort;
+ 	uint Tcoun;
+-	int len, pos;
++	int len, pos, numcell, nextPos, prevPos;
+ 	int keyModifiers=0;
+ 	Qt::KeyboardModifiers buttonModifiers = k->modifiers();
+ 	if (k->modifiers() & Qt::ShiftModifier)
+@@ -2946,15 +3005,18 @@
+ 		}
+ 		else if ( buttonModifiers & Qt::ShiftModifier )
+ 		{
+-			--CPos;
++			int newPos = itemText.textAttributes()->previousCellPosition(CPos);
++			int delta = newPos - CPos;
++			CPos = newPos;
+ 			if ( CPos < 0 )
+ 				CPos = 0;
+ 			else
+-				ExpandSel(-1, oldPos);
++				ExpandSel(delta, oldPos);
+ 		}
+ 		else
+ 		{
+-			--CPos;
++			int newPos = itemText.textAttributes()->previousCellPosition(CPos);
++			CPos = (newPos==CPos) ? --CPos : newPos;
+ 			if (CPos < firstInFrame())
+ 			{
+ 				CPos = firstInFrame();
+@@ -3003,16 +3065,17 @@
+ 		}
+ 		else if ( buttonModifiers & Qt::ShiftModifier )
+ 		{
+-			++CPos;
+-			if ( CPos > itemText.length() )
+-				--CPos;
+-			else
+-				ExpandSel(1, oldPos);
++			int newPos = itemText.textAttributes()->nextCellPosition(CPos);
++			int delta = newPos - CPos;
++			CPos = newPos;
++			if ( CPos <= itemText.length() )
++				ExpandSel(delta, oldPos);
+ 		}
+ 		else
+ 		{
+-			++CPos; // new position within text ?
+-			if (CPos > lastInFrame())
++			int newPos = itemText.textAttributes()->nextCellPosition(CPos);
++			CPos = (newPos==CPos) ? ++CPos : newPos;
++			if (CPos > lastInFrame()) // new position within text ?
+ 			{
+ //				--CPos;
+ 				CPos = lastInFrame() + 1;
+@@ -3053,10 +3116,19 @@
+ 			keyRepeat = false;
+ 			return;
+ 		}
++		numcell = 1;
++#if defined (Q_WS_X11)
++		if ( buttonModifiers & Qt::ControlModifier )
++			nextPos = itemText.textAttributes()->nextWordPosition(CPos);
++		else
++			nextPos = itemText.textAttributes()->nextCellPosition(CPos);
++
++		numcell = nextPos - CPos;
++#endif
+ 		cr = itemText.text(CPos,1);
+ 		if (itemText.lengthOfSelection() == 0)
+ 		{
+-			itemText.select(CPos, 1, true);
++			itemText.select(CPos, numcell, true);
+ 			HasSel = true;
+ 		}
+ 		oldCPos = itemText.startOfSelection();
+@@ -3092,8 +3164,16 @@
+ 		cr = itemText.text(qMax(CPos-1,0),1);
+ 		if (itemText.lengthOfSelection() == 0)
+ 		{
+-			--CPos;
+-			itemText.select(CPos, 1, true);
++			numcell = 1;
++			prevPos = CPos - 1;
++#if defined (Q_WS_X11)
++			if ( buttonModifiers & Qt::ControlModifier ) {
++				prevPos = itemText.textAttributes()->previousWordPosition(CPos);
++				numcell = CPos - prevPos;
++			}
++#endif
++			CPos = prevPos;
++			itemText.select(CPos, numcell, true);
+ 			HasSel = true;
+ 		}
+ 		oldCPos = itemText.startOfSelection();
+@@ -3224,58 +3304,9 @@
+ 
+ void PageItem_TextFrame::setNewPos(int oldPos, int len, int dir)
+ {
+-	
+-	bool isSpace, wasSpace;
+-	if ( dir > 0 && oldPos < len )
+-	{
+-		wasSpace = itemText.text(oldPos).isSpace();
+-		CPos=oldPos+1;
+-		while (CPos<len)
+-		{
+-			isSpace = itemText.text(CPos).isSpace();
+-			if (wasSpace && !isSpace)
+-				break;
+-			++CPos;
+-			wasSpace=isSpace;
+-			
+-		}
+-		/*
+-		isSpace = itemText.at(oldPos)->ch.at(0).isSpace();
+-		CPos = oldPos +1;
+-		for (int i=oldPos+1; i < len; i++)
+-		{
+-			if ( itemText.at(i)->ch.at(0).isSpace() != isSpace )
+-				break;
+-			CPos++;
+-		}
+-		*/
+-	}
+-	else if ( dir < 0 && oldPos > 0 )
+-	{
+-		CPos=oldPos-1;
+-		wasSpace = itemText.text(CPos).isSpace();
+-		while (CPos>0)
+-		{
+-			isSpace = itemText.text(CPos).isSpace();
+-			if (!wasSpace && isSpace)
+-			{
+-				++CPos;
+-				break;
+-			}
+-			--CPos;
+-			wasSpace=isSpace;
+-			
+-		}
+-		/*
+-		oldPos--;
+-		isSpace = itemText.at(oldPos)->ch.at(0).isSpace();
+-		for (int i=oldPos; i >= 0; i--)
+-		{
+-			if (  itemText.at(i)->ch.at(0).isSpace() != isSpace )
+-				break;
+-			CPos--;
+-		}
+-		*/
++	if (( dir > 0 && oldPos < len ) || ( dir < 0 && oldPos > 0 )) {
++		CPos = dir < 0 ? itemText.textAttributes()->previousWordPosition(oldPos) :
++							 itemText.textAttributes()->nextWordPosition(oldPos);
+ 	}
+ 	cursorBiasBackward = (dir < 0);
+ }
+Index: scribus-1.3.9.dfsg+svn20110210/scribus/text/CMakeLists.txt
+===================================================================
+--- scribus-1.3.9.dfsg+svn20110210.orig/scribus/text/CMakeLists.txt	2008-06-10 03:48:57.000000000 +0700
++++ scribus-1.3.9.dfsg+svn20110210/scribus/text/CMakeLists.txt	2011-04-01 12:10:46.000000000 +0700
+@@ -13,8 +13,11 @@
+ specialchars.cpp
+ storytext.cpp
+ sctext_shared.cpp
++sctextattributes.cpp
+ fsize.cpp
+ frect.cpp
++
++scattributes_thai.cpp
+ )
+ 
+ 
+Index: scribus-1.3.9.dfsg+svn20110210/scribus/text/scattributes_thai.cpp
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ scribus-1.3.9.dfsg+svn20110210/scribus/text/scattributes_thai.cpp	2011-04-01 12:17:45.000000000 +0700
+@@ -0,0 +1,250 @@
++/*
++ For general Scribus (>=1.3.2) copyright and licensing information please refer
++ to the COPYING file provided with the program. Following this notice may exist
++ a copyright and/or license notice that predates the release of Scribus 1.3.2
++ for which a new license (GPL+exception) is in place.
++ */
++/***************************************************************************
++scattributes_thai.cpp -  description
++-------------------
++    begin                : Sat Aug 28 2010
++    copyright            : (C) 2010 by Thanomsub Noppaburana
++    email                : donga.nb@gmail.com
++
++    -------------------
++
++    This is based on HarfBuzz Thai, an OpenType Layout engine library.
++
++    Copyright (C) 2008-2010 Thanomsub Noppaburana <donga.nb@gmail.com>
++    Copyright (C) 2007 Jakkapun Kwanroengjai <jakkapun@mm.co.th>
++    Copyright (C) 2003 Pattara Kiatisevi <pattara-list@mm.co.th>
++    Copyright (C) 2003 Theppitak Karoonboonyanan <thep@linux.thai.net>
++
++    ***************************************************************************/
++
++/***************************************************************************
++*                                                                         *
++*   This program is free software; you can redistribute it and/or modify  *
++*   it under the terms of the GNU General Public License as published by  *
++*   the Free Software Foundation; either version 2 of the License, or     *
++*   (at your option) any later version.                                   *
++*                                                                         *
++***************************************************************************/
++
++#include <QDebug>
++#include <QLibrary>
++#include <QTextCodec>
++
++#include "scribusapi.h"
++#include "fonts/scface.h"
++
++#define LIBTHAI_MAJOR   "0"
++
++/*
++ * please update these codes if libthai changed.
++ */
++struct thcell_t {
++    unsigned char base;      /**< base character */
++    unsigned char hilo;      /**< upper/lower vowel/diacritic */
++    unsigned char top;       /**< top-level mark */
++};
++typedef int (*th_brk_def) (const unsigned char*, int*, size_t);
++typedef int (*th_render_cell_tis_def) (struct thcell_t cell, unsigned char res[], size_t res_sz, int is_decomp_am);
++typedef int (*th_render_cell_win_def) (struct thcell_t cell, unsigned char res[], size_t res_sz, int is_decomp_am);
++typedef int (*th_render_cell_mac_def) (struct thcell_t cell, unsigned char res[], size_t res_sz, int is_decomp_am);
++typedef size_t (*th_next_cell_def) (const unsigned char *, size_t, struct thcell_t *, int);
++
++/* libthai releated function handles */
++static th_brk_def th_brk = 0;
++static th_next_cell_def th_next_cell = 0;
++static th_render_cell_tis_def th_render_cell_tis = 0;
++static th_render_cell_win_def th_render_cell_win = 0;
++static th_render_cell_mac_def th_render_cell_mac = 0;
++
++/* TIS-to-Unicode glyph maps for characters 0x80-0xff */
++static int tis620_0[128] = {
++    /**/ 0,      0,      0,      0,      0,      0,      0,      0,
++    /**/ 0,      0,      0,      0,      0,      0,      0,      0,
++    /**/ 0,      0,      0,      0,      0,      0,      0,      0,
++    /**/ 0,      0,      0,      0,      0,      0,      0,      0,
++    0x0020, 0x0e01, 0x0e02, 0x0e03, 0x0e04, 0x0e05, 0x0e06, 0x0e07,
++    0x0e08, 0x0e09, 0x0e0a, 0x0e0b, 0x0e0c, 0x0e0d, 0x0e0e, 0x0e0f,
++    0x0e10, 0x0e11, 0x0e12, 0x0e13, 0x0e14, 0x0e15, 0x0e16, 0x0e17,
++    0x0e18, 0x0e19, 0x0e1a, 0x0e1b, 0x0e1c, 0x0e1d, 0x0e1e, 0x0e1f,
++    0x0e20, 0x0e21, 0x0e22, 0x0e23, 0x0e24, 0x0e25, 0x0e26, 0x0e27,
++    0x0e28, 0x0e29, 0x0e2a, 0x0e2b, 0x0e2c, 0x0e2d, 0x0e2e, 0x0e2f,
++    0x0e30, 0x0e31, 0x0e32, 0x0e33, 0x0e34, 0x0e35, 0x0e36, 0x0e37,
++    0x0e38, 0x0e39, 0x0e3a,      0,      0,      0,      0, 0x0e3f,
++    0x0e40, 0x0e41, 0x0e42, 0x0e43, 0x0e44, 0x0e45, 0x0e46, 0x0e47,
++    0x0e48, 0x0e49, 0x0e4a, 0x0e4b, 0x0e4c, 0x0e4d, 0x0e4e, 0x0e4f,
++    0x0e50, 0x0e51, 0x0e52, 0x0e53, 0x0e54, 0x0e55, 0x0e56, 0x0e57,
++    0x0e58, 0x0e59, 0x0e5a, 0x0e5b,      0,      0,      0,      0
++};
++
++static int tis620_1[128] = {
++    0xf89e,      0,      0, 0xf88c, 0xf88f, 0xf892, 0xf895, 0xf898,
++    0xf88b, 0xf88e, 0xf891, 0xf894, 0xf897,      0,      0, 0xf899,
++    0xf89a,      0, 0xf884, 0xf889, 0xf885, 0xf886, 0xf887, 0xf888,
++    0xf88a, 0xf88d, 0xf890, 0xf893, 0xf896,      0,      0,      0,
++    /**/ 0, 0x0e01, 0x0e02, 0x0e03, 0x0e04, 0x0e05, 0x0e06, 0x0e07,
++    0x0e08, 0x0e09, 0x0e0a, 0x0e0b, 0x0e0c, 0x0e0d, 0x0e0e, 0x0e0f,
++    0x0e10, 0x0e11, 0x0e12, 0x0e13, 0x0e14, 0x0e15, 0x0e16, 0x0e17,
++    0x0e18, 0x0e19, 0x0e1a, 0x0e1b, 0x0e1c, 0x0e1d, 0x0e1e, 0x0e1f,
++    0x0e20, 0x0e21, 0x0e22, 0x0e23, 0x0e24, 0x0e25, 0x0e26, 0x0e27,
++    0x0e28, 0x0e29, 0x0e2a, 0x0e2b, 0x0e2c, 0x0e2d, 0x0e2e, 0x0e2f,
++    0x0e30, 0x0e31, 0x0e32, 0x0e33, 0x0e34, 0x0e35, 0x0e36, 0x0e37,
++    0x0e38, 0x0e39, 0x0e3a,      0,      0,      0,      0, 0x0e3f,
++    0x0e40, 0x0e41, 0x0e42, 0x0e43, 0x0e44, 0x0e45, 0x0e46, 0x0e47,
++    0x0e48, 0x0e49, 0x0e4a, 0x0e4b, 0x0e4c, 0x0e4d,      0, 0x0e4f,
++    0x0e50, 0x0e51, 0x0e52, 0x0e53, 0x0e54, 0x0e55, 0x0e56, 0x0e57,
++    0x0e58, 0x0e59,      0,      0, 0xf89b, 0xf89c, 0xf89d,      0
++};
++
++static int tis620_2[128] = {
++    0xf700, 0xf701, 0xf702, 0xf703, 0xf704, 0x2026, 0xf705, 0xf706,
++    0xf707, 0xf708, 0xf709, 0xf70a, 0xf70b, 0xf70c, 0xf70d, 0xf70e,
++    0xf70f, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014,
++    0xf710, 0xf711, 0xf712, 0xf713, 0xf714, 0xf715, 0xf716, 0xf717,
++    0x00a0, 0x0e01, 0x0e02, 0x0e03, 0x0e04, 0x0e05, 0x0e06, 0x0e07,
++    0x0e08, 0x0e09, 0x0e0a, 0x0e0b, 0x0e0c, 0x0e0d, 0x0e0e, 0x0e0f,
++    0x0e10, 0x0e11, 0x0e12, 0x0e13, 0x0e14, 0x0e15, 0x0e16, 0x0e17,
++    0x0e18, 0x0e19, 0x0e1a, 0x0e1b, 0x0e1c, 0x0e1d, 0x0e1e, 0x0e1f,
++    0x0e20, 0x0e21, 0x0e22, 0x0e23, 0x0e24, 0x0e25, 0x0e26, 0x0e27,
++    0x0e28, 0x0e29, 0x0e2a, 0x0e2b, 0x0e2c, 0x0e2d, 0x0e2e, 0x0e2f,
++    0x0e30, 0x0e31, 0x0e32, 0x0e33, 0x0e34, 0x0e35, 0x0e36, 0x0e37,
++    0x0e38, 0x0e39, 0x0e3a,      0,      0,      0,      0, 0x0e3f,
++    0x0e40, 0x0e41, 0x0e42, 0x0e43, 0x0e44, 0x0e45, 0x0e46, 0x0e47,
++    0x0e48, 0x0e49, 0x0e4a, 0x0e4b, 0x0e4c, 0x0e4d, 0x0e4e, 0x0e4f,
++    0x0e50, 0x0e51, 0x0e52, 0x0e53, 0x0e54, 0x0e55, 0x0e56, 0x0e57,
++    0x0e58, 0x0e59, 0x0e5a, 0x0e5b, 0xf718, 0xf719, 0xf71a,      0
++};
++
++enum ThaiFontType {
++    TIS = 0,
++    WIN,
++    MAC,
++};
++
++static QMap<QString, ThaiFontType> fontTypeMap;
++
++static void* SC_LibThaiResolve(const char* symbol)
++{
++    return QLibrary::resolve("thai", LIBTHAI_MAJOR, symbol);
++}
++
++static int init_libthai() {
++    if (!th_brk || !th_next_cell || !th_render_cell_tis || !th_render_cell_win || !th_render_cell_mac) {
++        th_brk = (th_brk_def) SC_LibThaiResolve("th_brk");
++        th_next_cell = (th_next_cell_def) SC_LibThaiResolve("th_next_cell");
++        th_render_cell_tis = (th_render_cell_tis_def) SC_LibThaiResolve("th_render_cell_tis");
++        th_render_cell_win = (th_render_cell_win_def) SC_LibThaiResolve("th_render_cell_win");
++        th_render_cell_mac = (th_render_cell_mac_def) SC_LibThaiResolve("th_render_cell_mac");
++    }
++    return (th_brk && th_next_cell && th_render_cell_tis && th_render_cell_win && th_render_cell_mac);
++}
++
++static int thai_get_glyph_index (ThaiFontType font_type, unsigned char c)
++{
++    switch (font_type){
++        case TIS: return (c & 0x80) ? tis620_0[c & 0x7f] : c;
++        case WIN: return (c & 0x80) ? tis620_1[c & 0x7f] : c;
++        case MAC: return (c & 0x80) ? tis620_2[c & 0x7f] : c;
++        default:  return 0;
++    }
++}
++
++static int thai_contain_glyphs (ScFace* font, const int glyph_map[128])
++{
++    unsigned char c;
++    static QTextCodec *codec = 0;
++    if (!codec) codec = QTextCodec::codecForName("UTF-8");
++
++    for (c = 0; c < 0x80; c++) {
++        if ( glyph_map[c] ) {
++			QChar chars(glyph_map[c]);
++			//QByteArray ba = codec->fromUnicode(&chars, 1);
++			//const uchar *data = (const uchar *)ba.constData();
++            if ( !font->canRender ( QChar((ushort) chars.unicode()) )  )
++                return 0;
++        }
++    }
++    return 1;
++}
++
++static ThaiFontType getThaiFontType(ScFace* font)
++{
++    ThaiFontType font_type;
++
++    if (fontTypeMap.contains(font->scName()))
++        font_type = fontTypeMap.value(font->scName());
++    else {
++        if ( thai_contain_glyphs (font, tis620_2) )
++            font_type = MAC;
++        else if ( thai_contain_glyphs (font, tis620_1) )
++            font_type = WIN;
++        else
++            font_type = TIS;
++
++        fontTypeMap.insert(font->scName(), font_type);
++        qDebug() << QString("FontType: %1 : %2").arg(font_type).arg(font->scName());
++    }
++    return font_type;
++}
++
++static QList<uint> ThaiConvertStringToGlyphIndices (ScFace* font, const QString& text)
++{
++    QList<uint> result;
++    char *cstr = 0;
++    static QTextCodec *thaiCodec = 0;
++    uint i = 0, length = 0;
++
++    if (!thaiCodec)
++        thaiCodec = QTextCodec::codecForMib(2259);
++
++    if (!init_libthai()) {
++        thaiCodec = 0;
++        return result;
++    }
++
++    cstr = strdup(thaiCodec->fromUnicode(text).data());
++    if (!cstr)
++        return result;
++
++    length = strlen(cstr);
++    ThaiFontType fontType = getThaiFontType(font);
++    bool decomposeSaraAm = true;
++
++    while (i < length) {
++        struct thcell_t tis_cell;
++        unsigned char rglyphs[4];
++        int cell_length;
++        int lgn = 0;
++        bool haveSaraAm = false;
++
++        cell_length = th_next_cell ((const unsigned char *)cstr + i, length - i, &tis_cell, decomposeSaraAm);
++        haveSaraAm  = (cstr[i + cell_length - 1] == (char)0xd3);
++
++        /* Find Logical Glyphs by font type */
++        if (!haveSaraAm) {
++            switch (fontType) {
++            case TIS: lgn = th_render_cell_tis (tis_cell, rglyphs, sizeof(rglyphs) / sizeof(rglyphs[0]), decomposeSaraAm); break;
++            case WIN: lgn = th_render_cell_mac (tis_cell, rglyphs, sizeof(rglyphs) / sizeof(rglyphs[0]), decomposeSaraAm); break;
++            case MAC: lgn = th_render_cell_win (tis_cell, rglyphs, sizeof(rglyphs) / sizeof(rglyphs[0]), decomposeSaraAm); break;
++            }
++        }
++        else
++            lgn = th_render_cell_tis (tis_cell, rglyphs, sizeof(rglyphs) / sizeof(rglyphs[0]), false);
++
++        /* Add glyphs to glyphs string and setting some attributes */
++        for (int lgi = 0; lgi < lgn; lgi++) {
++            if (rglyphs[lgi] != 0xdd/*TH_BLANK_BASE_GLYPH*/)
++                result.append( (uint) thai_get_glyph_index (fontType, rglyphs[lgi]) );
++        }
++
++        i += cell_length;
++    }
++
++    free(cstr);
++
++    return result;
++}
+Index: scribus-1.3.9.dfsg+svn20110210/scribus/text/sctextattributes.cpp
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ scribus-1.3.9.dfsg+svn20110210/scribus/text/sctextattributes.cpp	2011-04-01 12:15:27.000000000 +0700
+@@ -0,0 +1,170 @@
++/*
++ For general Scribus (>=1.3.2) copyright and licensing information please refer
++ to the COPYING file provided with the program. Following this notice may exist
++ a copyright and/or license notice that predates the release of Scribus 1.3.2
++ for which a new license (GPL+exception) is in place.
++ */
++/***************************************************************************
++sctextattributes.cpp  -  description
++-------------------
++    begin                : Sat Aug 28 2010
++    copyright            : (C) 2010 by Thanomsub Noppaburana
++    email                : donga.nb@gmail.com
++	***************************************************************************/
++
++/***************************************************************************
++*                                                                         *
++*   This program is free software; you can redistribute it and/or modify  *
++*   it under the terms of the GNU General Public License as published by  *
++*   the Free Software Foundation; either version 2 of the License, or     *
++*   (at your option) any later version.                                   *
++*                                                                         *
++***************************************************************************/
++
++
++#include <QDebug>
++
++#include "storytext.h"
++#include "sctextattributes.h"
++
++/* include scripts */
++#include "scattributes_thai.cpp"
++
++_ConvertStringToGlyphIndices ScTextAttributes::convertStringToGlyphIndices = 0;
++
++ScTextAttributes::ScTextAttributes(StoryText* itemText)
++	: QObject(),
++	  m_itemText(itemText),
++	  m_textLayout(0)
++{
++	m_textLayout = new QTextLayout;
++}
++ScTextAttributes::~ScTextAttributes()
++{
++	delete m_textLayout;
++	convertStringToGlyphIndices = 0;
++}
++void ScTextAttributes::setText(const QString& text)
++{
++	if (m_textLayout->text() != text)
++		m_textLayout->setText(text);
++}
++bool ScTextAttributes::updateTextCache()
++{
++	bool needUpdate = false;
++	static QString fontName;
++	int length = m_itemText->length();
++	ParagraphStyle style = m_itemText->paragraphStyle(m_itemText->firstInFrame());
++	QString currentFontName = style.charStyle().font().scName();
++	QString currentText = m_itemText->text(0, length);
++	if ((length != 0 && m_textLayout->text() != currentText) || fontName != currentFontName) {
++		if (length != 0 && m_textLayout->text() != currentText)
++			m_textLayout->setText(currentText);
++		fontName = currentFontName;
++		needUpdate = true;
++	}
++	return needUpdate;
++}
++bool ScTextAttributes::update()
++{
++	bool needUpdate = updateTextCache();
++	/*
++	// FIXME : lets ScTextAttributes::getRenderChar(pos) to render each cell instead,
++	//       : which performance may be poor than these codes.
++	if (needUpdate) {
++		ParagraphStyle style = m_itemText->paragraphStyle(m_itemText->firstInFrame());
++		ScFace font = style.charStyle().font();
++
++		m_glyphsForRender.clear();
++		m_glyphsForRender = ThaiConvertStringToGlyphIndices(&font, m_textLayout->text());
++	}*/
++	return needUpdate;
++}
++QTextLayout* ScTextAttributes::textLayout()
++{
++	return m_textLayout;
++}
++int ScTextAttributes::previousCellPosition(int pos)
++{
++	return textLayout()->previousCursorPosition(pos, QTextLayout::SkipCharacters);
++}
++int ScTextAttributes::nextCellPosition(int pos)
++{
++	return textLayout()->nextCursorPosition(pos, QTextLayout::SkipCharacters);
++}
++int ScTextAttributes::previousWordPosition(int pos)
++{
++	return textLayout()->previousCursorPosition(pos, QTextLayout::SkipWords);
++}
++int ScTextAttributes::nextWordPosition(int pos)
++{
++	return textLayout()->nextCursorPosition(pos, QTextLayout::SkipWords);
++}
++QString ScTextAttributes::text()
++{
++	return textLayout()->text();
++}
++
++_ConvertStringToGlyphIndices ScTextAttributes::script(const QString& text)
++{
++	if (!text.isEmpty()) {
++		if (text[0] >= 0x0e01 && text[0] <= 0x0e66)
++			convertStringToGlyphIndices = ThaiConvertStringToGlyphIndices;
++		else
++			convertStringToGlyphIndices = 0;
++	}
++	return convertStringToGlyphIndices;
++}
++
++TextCell ScTextAttributes::getTextCell(int pos)
++{
++	static TextCell result;
++	int textLength, prev, begin, end;
++	if (result.chrs.isEmpty() || !(pos>=result.beginPos && pos <= result.endPos))
++	{
++		textLength = text().length();
++		prev  = previousCellPosition(pos);
++		begin = pos==0 ? 0 : nextCellPosition(prev);
++		end   = pos==textLength ? textLength : nextCellPosition(begin) - 1;
++		result.beginPos = begin;
++		result.endPos   = end;
++		result.chrs     = text().mid(result.beginPos, end-begin+1);
++		//qDebug() << QString("getTextCell(%1) : begin: %2 , end: %3 | chrs: %4")
++		//					.arg(pos).arg(result.beginPos).arg(result.endPos).arg(result.chrs);
++	}
++	return result;
++}
++uint ScTextAttributes::getRenderChar(int pos)
++{
++#if 1
++	static TextCell textCell;
++	static QList<uint> glyphs;
++	int textLength;
++	ParagraphStyle style = m_itemText->paragraphStyle(m_itemText->firstInFrame());
++	ScFace defaultFont = style.charStyle().font();
++	ScFace itemFont = m_itemText->item(pos)->font();
++	if (textCell.chrs.isEmpty() || !(pos>=textCell.beginPos && pos <= textCell.endPos))// || itemFont.scName() == defaultFont.scName()))
++	{
++		// FIXME please optimize the performance of these rendering glyphs codes.
++		QString textToRender;
++		glyphs.clear();
++
++		textLength = text().length();
++		textCell = getTextCell(pos);
++		textToRender = textCell.chrs;
++		//qDebug()<< "textToRender: " << textToRender;
++
++		// FIXME Use for THAI only, since SaraAm should be included in textcell
++		if (textCell.endPos+1 <= textLength-1) {
++			if (text()[textCell.endPos+1] == 0x0e33) { // Has Sara Am ?
++				textToRender += text()[textCell.endPos+1];
++			}
++		}
++
++		if (script(textToRender))
++			glyphs = convertStringToGlyphIndices(&itemFont, textToRender);
++	}
++	return (glyphs.count() > 0) ? glyphs[pos - textCell.beginPos] : text()[pos].unicode();
++#endif
++	//return m_glyphsForRender[pos];
++}
+Index: scribus-1.3.9.dfsg+svn20110210/scribus/text/sctextattributes.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ scribus-1.3.9.dfsg+svn20110210/scribus/text/sctextattributes.h	2011-04-01 12:20:52.000000000 +0700
+@@ -0,0 +1,95 @@
++/*
++ For general Scribus (>=1.3.2) copyright and licensing information please refer
++ to the COPYING file provided with the program. Following this notice may exist
++ a copyright and/or license notice that predates the release of Scribus 1.3.2
++ for which a new license (GPL+exception) is in place.
++ */
++/***************************************************************************
++sctextattributes.h  -  description
++-------------------
++    begin                : Sat Aug 28 2010
++    copyright            : (C) 2010 by Thanomsub Noppaburana
++    email                : donga.nb@gmail.com
++	***************************************************************************/
++
++/***************************************************************************
++*                                                                         *
++*   This program is free software; you can redistribute it and/or modify  *
++*   it under the terms of the GNU General Public License as published by  *
++*   the Free Software Foundation; either version 2 of the License, or     *
++*   (at your option) any later version.                                   *
++*                                                                         *
++***************************************************************************/
++
++
++#ifndef SCTEXTATTRIBUTES_H
++#define SCTEXTATTRIBUTES_H
++
++#include <QObject>
++#include <QString>
++#include <QTextLayout>
++#include <QList>
++
++#include "scribusapi.h"
++#include "style.h"
++
++struct TextCell
++{
++	QString chrs;
++	int beginPos;
++	int endPos;
++};
++
++class StoryText;
++
++typedef QList<uint> (*_ConvertStringToGlyphIndices) (ScFace* font, const QString& text);
++
++/**
++ * This class used to manage the attributes and each character's glyph
++ * in text string of Scribus textframe
++ *
++ * The text will be stored in the QTextLayout since the QTextLayout
++ * can manage the cell and word position of the text string.
++ *
++ * The character's glyph (for replaced the character in text) used to
++ * renders the correct glyph in any language.
++ */
++class SCRIBUS_API ScTextAttributes : public QObject
++{
++public:
++	ScTextAttributes(StoryText* itemText);
++	~ScTextAttributes();
++
++	QString text();
++	void setText(const QString& text);
++
++	/**
++	 * update() : call for update when need to Laying out.
++	 */
++	bool update();
++
++	QList<uint> glyphsForRender() { return m_glyphsForRender; }
++
++	int previousCellPosition(int pos);
++	int nextCellPosition(int pos);
++	int previousWordPosition(int pos);
++	int nextWordPosition(int pos);
++
++	TextCell getTextCell(int pos);
++
++	uint getRenderChar(int pos);
++
++	QTextLayout* textLayout();
++
++	_ConvertStringToGlyphIndices script(const QString& text);
++
++private:
++	bool updateTextCache();
++	static _ConvertStringToGlyphIndices convertStringToGlyphIndices;
++
++	StoryText* m_itemText;
++	QTextLayout* m_textLayout;
++	QList<uint> m_glyphsForRender;
++};
++
++#endif // SCTEXTATTRIBUTES_H
+Index: scribus-1.3.9.dfsg+svn20110210/scribus/text/storytext.cpp
+===================================================================
+--- scribus-1.3.9.dfsg+svn20110210.orig/scribus/text/storytext.cpp	2010-12-19 03:54:58.000000000 +0700
++++ scribus-1.3.9.dfsg+svn20110210/scribus/text/storytext.cpp	2011-04-01 12:19:05.000000000 +0700
+@@ -49,6 +49,9 @@
+ 	else {
+ 		d = new ScText_Shared(NULL);
+ 	}
++
++	m_textAttributes = new ScTextAttributes(this);
++
+ 	selFirst = 0;
+ 	selLast = -1;
+ 	
+@@ -65,6 +68,8 @@
+ {
+ 	d = new ScText_Shared(NULL);
+ 
++	m_textAttributes = new ScTextAttributes(this);
++
+ 	selFirst = 0;
+ 	selLast = -1;
+ 	
+@@ -76,6 +81,8 @@
+ 
+ StoryText::StoryText(const StoryText & other) : QObject(), SaxIO(), doc(other.doc)
+ {
++	m_textAttributes = new ScTextAttributes(this);
++
+ 	d = other.d;
+ 	d->refs++;
+ 	
+@@ -111,6 +118,7 @@
+ 		d->len = 0;
+ 		delete d;
+ 	}	
++	delete 	m_textAttributes;
+ }
+ 
+ StoryText StoryText::copy() const
+@@ -504,6 +512,16 @@
+ 	return result;
+ }
+ 
++QTextLayout* StoryText::textLayout()
++{
++	return m_textAttributes->textLayout();
++}
++
++ScTextAttributes* StoryText::textAttributes()
++{
++	return m_textAttributes;
++}
++
+ QString StoryText::textWithSmartHyphens(int pos, uint len) const
+ {
+ 	QString result("");
+@@ -951,18 +969,26 @@
+ }
+ int StoryText::nextWord(int pos)
+ {
++	/*
+ 	int len = length();
+ 	pos = qMin(len, pos+1);
+ 	while (pos < len  && wordBoundaries.indexOf(text(pos)) < 0)
+ 		++pos;
+ 	return pos < len ? pos + 1 : pos;
++	*/
++	pos = qMin(length(), pos);
++	return m_textAttributes->nextWordPosition(pos);
+ }
+ int StoryText::prevWord(int pos)
+ {
++	/*
+ 	pos = qMax(0, pos-1);
+ 	while (pos > 0 && wordBoundaries.indexOf(text(pos)) < 0)
+ 		--pos;
+ 	return wordBoundaries.indexOf(text(pos)) < 0 ? pos + 1 : pos;
++	*/
++	pos = qMax(0, pos);
++	return m_textAttributes->previousWordPosition(pos);
+ }
+ int StoryText::nextSentence(int pos)
+ {
+Index: scribus-1.3.9.dfsg+svn20110210/scribus/text/storytext.h
+===================================================================
+--- scribus-1.3.9.dfsg+svn20110210.orig/scribus/text/storytext.h	2010-12-06 04:01:41.000000000 +0700
++++ scribus-1.3.9.dfsg+svn20110210/scribus/text/storytext.h	2011-04-01 12:10:46.000000000 +0700
+@@ -28,11 +28,13 @@
+ #include <QObject>
+ #include <QString>
+ #include <QList>
++#include <QTextLayout>
+ #include <cassert>
+ 
+ //#include "text/paragraphlayout.h"
+ #include "text/frect.h"
+ #include "text/specialchars.h"
++#include "text/sctextattributes.h"
+ #include "sctextstruct.h"
+ #include "style.h"
+ #include "styles/charstyle.h"
+@@ -117,6 +119,8 @@
+  	QChar text(int pos) const;
+  	QString text(int pos, uint len) const;
+  	PageItem* object(int pos) const;
++	QTextLayout* textLayout();
++	ScTextAttributes* textAttributes();
+ 	
+ 	int nextCharPos(int c);
+ 	int prevCharPos(int c);
+@@ -288,6 +292,7 @@
+ // 	uint layouterVersion;
+  	/// is true after layout() has been exercised
+ // 	bool layouterValid;
++	ScTextAttributes *m_textAttributes;
+  };
+ 
+ 
